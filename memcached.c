@@ -1322,12 +1322,40 @@ static void process_bin_get(conn *c) {
         }
         fprintf(stderr, "\n");
     }
-
+    int32_t offset = 0;
+    void *p;
+    size_t old_nkey = nkey;
+    (void)old_nkey;
+    if ((p = memchr(key, '@', nkey))) {
+        char buf[20];
+        size_t offlen = nkey - (((char *)p) - key) - 1;
+        assert(sizeof(buf) > offlen);
+        memcpy(buf, (char *)p + 1, offlen);
+        buf[offlen] = 0;
+        offset = atoi(buf);
+        nkey = nkey - offlen - 1;
+    }
+#if 0
+    if (1) {
+        int ii;
+        fprintf(stderr, "original key %.*s, offset %d\n", (int)old_nkey, key, offset);
+        fprintf(stderr, "<%d GET ", c->sfd);
+        for (ii = 0; ii < nkey; ++ii) {
+            fprintf(stderr, "%c", key[ii]);
+        }
+        fprintf(stderr, "\n");
+    }
+#endif
     it = item_get(key, nkey);
     if (it) {
         /* the length has two unnecessary bytes ("\r\n") */
         uint16_t keylen = 0;
         uint32_t bodylen = sizeof(rsp->message.body) + (it->nbytes - 2);
+        if (offset > it->nbytes - 2) {
+            fprintf(stderr, "offset too large. Maybe evicited?\n");
+            offset = 0;
+        }
+        bodylen -= offset;
 
         item_update(it);
         pthread_mutex_lock(&c->thread->stats.mutex);
@@ -1354,7 +1382,7 @@ static void process_bin_get(conn *c) {
         }
 
         /* Add the data minus the CRLF */
-        add_iov(c, ITEM_data(it), it->nbytes - 2);
+        add_iov(c, ITEM_data(it) + offset, it->nbytes - 2 - offset);
         conn_set_state(c, conn_mwrite);
         c->write_and_go = conn_new_cmd;
         /* Remember this command so we can garbage collect it later */
@@ -2098,7 +2126,6 @@ static void process_bin_append_prepend(conn *c) {
     int nkey;
     int vlen;
     item *it;
-
     assert(c != NULL);
 
     key = binary_get_key(c);
